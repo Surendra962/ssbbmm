@@ -1,4 +1,6 @@
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 import pandas as pd
 import re
@@ -28,30 +30,112 @@ worksheet = spreadsheet.sheet1
 
 
 # =========================================================
-# 2. GET SBM(G) DASHBOARD
+# 2. CONNECT TO SBM(G) DASHBOARD
 # =========================================================
 
 url = "https://sbm.gov.in/sbmgdashboard/statesdashboard.aspx"
 
-response = requests.get(
-    url,
-    headers={"User-Agent": "Mozilla/5.0"},
-    timeout=30
+headers = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/151.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,"
+        "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Connection": "keep-alive"
+}
+
+
+# Create session with retry
+session = requests.Session()
+
+retry_strategy = Retry(
+    total=5,
+    connect=5,
+    read=5,
+    backoff_factor=5,
+    status_forcelist=[
+        429,
+        500,
+        502,
+        503,
+        504
+    ],
+    allowed_methods=["GET"],
+    raise_on_status=False
 )
 
-response.raise_for_status()
+adapter = HTTPAdapter(
+    max_retries=retry_strategy
+)
+
+session.mount(
+    "https://",
+    adapter
+)
+
+session.mount(
+    "http://",
+    adapter
+)
+
+
+print("🔄 Connecting to SBM(G) dashboard...")
+
+
+try:
+
+    response = session.get(
+        url,
+        headers=headers,
+        timeout=(90, 180)
+    )
+
+    response.raise_for_status()
+
+    print(
+        f"✅ SBM(G) dashboard connected — HTTP {response.status_code}"
+    )
+
+except requests.exceptions.RequestException as e:
+
+    print(
+        f"❌ SBM(G) dashboard connection failed: {e}"
+    )
+
+    raise SystemExit(
+        "SBM(G) dashboard is currently unreachable "
+        "from the GitHub Actions runner."
+    )
+
+
+# =========================================================
+# 3. PARSE DASHBOARD
+# =========================================================
 
 soup = BeautifulSoup(
     response.text,
     "html.parser"
 )
 
-text = soup.get_text(" ", strip=True)
-text = re.sub(r"\s+", " ", text)
+text = soup.get_text(
+    " ",
+    strip=True
+)
+
+text = re.sub(
+    r"\s+",
+    " ",
+    text
+)
 
 
 # =========================================================
-# 3. GENERIC VALUE EXTRACTION
+# 4. GENERIC VALUE EXTRACTION
 # =========================================================
 
 def get_value(label):
@@ -72,7 +156,9 @@ def get_value(label):
         return None
 
     change = (
-        int(match.group(1).replace(",", ""))
+        int(
+            match.group(1).replace(",", "")
+        )
         if match.group(1)
         else 0
     )
@@ -85,7 +171,7 @@ def get_value(label):
 
 
 # =========================================================
-# 4. DATA STORAGE
+# 5. DATA STORAGE
 # =========================================================
 
 data = []
@@ -94,6 +180,7 @@ data = []
 def add_data(indicator, change, value):
 
     if value is not None:
+
         data.append([
             indicator,
             change,
@@ -102,7 +189,7 @@ def add_data(indicator, change, value):
 
 
 # =========================================================
-# 5. STANDARD INDICATORS
+# 6. STANDARD INDICATORS
 # =========================================================
 
 indicators = [
@@ -145,7 +232,9 @@ for indicator in indicators:
     result = get_value(indicator)
 
     if result:
+
         change, value = result
+
         add_data(
             indicator,
             change,
@@ -154,7 +243,7 @@ for indicator in indicators:
 
 
 # =========================================================
-# 6. ODF PLUS VILLAGES & MODEL
+# 7. ODF PLUS VILLAGES & ODF PLUS MODEL
 # =========================================================
 
 def extract_dashboard_value(label):
@@ -172,10 +261,11 @@ def extract_dashboard_value(label):
         re.IGNORECASE
     )
 
-    return (
-        int(match.group(1).replace(",", ""))
-        if match
-        else None
+    if not match:
+        return None
+
+    return int(
+        match.group(1).replace(",", "")
     )
 
 
@@ -186,6 +276,7 @@ odf_plus_villages = extract_dashboard_value(
 odf_plus_model = extract_dashboard_value(
     "ODF Plus Model"
 )
+
 
 add_data(
     "ODF Plus Villages",
@@ -201,7 +292,7 @@ add_data(
 
 
 # =========================================================
-# 7. ODF PLUS STATUS
+# 8. ODF PLUS STATUS
 #    DISTRICTS / BLOCKS / GRAM PANCHAYATS
 # =========================================================
 
@@ -256,7 +347,7 @@ for level, pattern in status_patterns.items():
 
 
 # =========================================================
-# 8. BIOGAS & CBG PLANTS
+# 9. BIOGAS & CBG PLANTS
 # =========================================================
 
 plant_patterns = {
@@ -307,7 +398,7 @@ for plant, pattern in plant_patterns.items():
 
 
 # =========================================================
-# 9. ODF PLUS MODEL VERIFICATION
+# 10. ODF PLUS MODEL VERIFICATION
 # =========================================================
 
 verification_patterns = {
@@ -335,7 +426,9 @@ for indicator, pattern in verification_patterns.items():
     if match:
 
         change = (
-            int(match.group(1).replace(",", ""))
+            int(
+                match.group(1).replace(",", "")
+            )
             if match.group(1)
             else 0
         )
@@ -352,7 +445,7 @@ for indicator, pattern in verification_patterns.items():
 
 
 # =========================================================
-# 10. CREATE DATAFRAME
+# 11. CREATE DATAFRAME
 # =========================================================
 
 df = pd.DataFrame(
@@ -366,12 +459,14 @@ df = pd.DataFrame(
 
 
 # =========================================================
-# 11. REMOVE DUPLICATES & EMPTY VALUES
+# 12. REMOVE DUPLICATES & EMPTY VALUES
 # =========================================================
 
 df = (
     df
-    .dropna(subset=["Value"])
+    .dropna(
+        subset=["Value"]
+    )
     .drop_duplicates(
         subset=["Indicator"],
         keep="first"
@@ -381,7 +476,7 @@ df = (
 
 
 # =========================================================
-# 12. KEEP ONLY INDICATOR & VALUE
+# 13. KEEP ONLY INDICATOR & VALUE
 # =========================================================
 
 df = df[
@@ -390,7 +485,7 @@ df = df[
 
 
 # =========================================================
-# 13. ADD DATE & TIME
+# 14. ADD DATE & TIME
 # =========================================================
 
 date_row = pd.DataFrame({
@@ -403,13 +498,16 @@ date_row = pd.DataFrame({
 })
 
 df = pd.concat(
-    [date_row, df],
+    [
+        date_row,
+        df
+    ],
     ignore_index=True
 )
 
 
 # =========================================================
-# 14. FINAL COLUMN ORDER
+# 15. REQUIRED INDICATOR ORDER
 # =========================================================
 
 indicator_order = [
@@ -445,15 +543,17 @@ indicator_order = [
     # Community Assets
     "Community Compost pits",
     "Waste collection & Segregation sheds",
-    "Vehicles for collection and Transportation of waste",
+    "Vehicles for Collection and Transportation of Waste",
     "Community Soak/Leach/Magic pits",
     "Drainage facility",
     "Phytorid/ DEWATS/ Wetlands/ Duckweed Pond",
     "WSP 3/5 Pond System",
 
-    # Biogas
+    # Biogas / CBG
     "Biogas Plants - Registered",
     "Biogas Plants - Functional",
+    "CBG Plants - Registered",
+    "CBG Plants - Functional",
 
     # Other Assets
     "Faecal Sludge Management Plant",
@@ -470,7 +570,7 @@ indicator_order = [
 
 
 # =========================================================
-# 15. REORDER DATA
+# 16. REORDER
 # =========================================================
 
 df = (
@@ -481,29 +581,61 @@ df = (
 
 
 # =========================================================
-# 16. CONVERT TO ONE ROW
+# 17. CONVERT TO ONE ROW
 # =========================================================
 
 df = df.T
 
 df.index.name = None
 
-df = df.reset_index(drop=True)
+df = df.reset_index(
+    drop=True
+)
 
 
 # =========================================================
-# 17. PUSH TO GOOGLE SHEETS
+# 18. REMOVE ANY COMPLETELY EMPTY COLUMNS
+# =========================================================
+
+df = df.dropna(
+    axis=1,
+    how="all"
+)
+
+
+# =========================================================
+# 19. PREPARE GOOGLE SHEET DATA
 # =========================================================
 
 headers = df.columns.tolist()
+
 row = df.iloc[0].tolist()
+
+
+# Convert pandas/numpy values to normal Python values
+headers = [
+    str(x)
+    for x in headers
+]
+
+row = [
+    "" if pd.isna(x) else x
+    for x in row
+]
+
+
+# =========================================================
+# 20. PUSH TO GOOGLE SHEETS
+# =========================================================
 
 existing_data = worksheet.get_all_values()
 
 
 if not existing_data:
 
-    # First run: create headers + first data row
+    # First run:
+    # Row 1 = headers
+    # Row 2 = data
 
     worksheet.update(
         "A1",
@@ -521,7 +653,8 @@ if not existing_data:
 
 else:
 
-    # Subsequent runs: append new row
+    # Subsequent runs:
+    # Append new data row
 
     next_row = len(existing_data) + 1
 
@@ -532,10 +665,22 @@ else:
     )
 
 
+# =========================================================
+# 21. FINAL STATUS
+# =========================================================
+
 print(
-    f"✅ SBM(G) dashboard data pushed successfully to Google Sheets — Row {next_row}"
+    f"✅ SBM(G) dashboard data pushed successfully."
 )
 
 print(
-    f"✅ Total indicators: {len(headers)}"
+    f"✅ Google Sheet row: {next_row}"
+)
+
+print(
+    f"✅ Number of columns: {len(headers)}"
+)
+
+print(
+    f"✅ Date: {row[0]}"
 )
