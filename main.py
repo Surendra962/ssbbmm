@@ -23,7 +23,15 @@ spreadsheet = gc.open_by_key(
     "1Uj72MCqn26u6v0A_g720k_sXg2OJQ1nR2VeNOlMCH60"
 )
 
+# First worksheet/tab
 worksheet = spreadsheet.sheet1
+
+print("\n========================================")
+print("GOOGLE SHEET CONNECTION")
+print("========================================")
+print("Spreadsheet :", spreadsheet.title)
+print("Worksheet   :", worksheet.title)
+print("Sheet URL   :", spreadsheet.url)
 
 
 # =========================================================
@@ -34,9 +42,12 @@ url = "https://sbm.gov.in/sbmgdashboard/statesdashboard.aspx"
 
 response = requests.get(
     url,
-    headers={"User-Agent": "Mozilla/5.0"},
+    headers={
+        "User-Agent": "Mozilla/5.0"
+    },
     timeout=30
 )
+
 response.raise_for_status()
 
 text = BeautifulSoup(
@@ -53,6 +64,12 @@ text = re.sub(
     text
 )
 
+print("\n========================================")
+print("DASHBOARD DATA")
+print("========================================")
+print("Dashboard loaded successfully.")
+print("Text length:", len(text))
+
 
 # =========================================================
 # 3. GENERIC EXTRACTION FUNCTION
@@ -62,7 +79,8 @@ def get_value(label):
 
     pattern = (
         rf"{re.escape(label)}"
-        r"\s*(?:\+\s*([\d,]+)\s*)?([\d,]+)"
+        r"\s*(?:\*?\s*\+?\s*([\d,]+)\s*)?"
+        r"\*?\s*([\d,]+)"
     )
 
     match = re.search(
@@ -146,6 +164,16 @@ for indicator in indicators:
             value
         ])
 
+        print(
+            f"✓ {indicator}: {value:,}"
+        )
+
+    else:
+
+        print(
+            f"✗ {indicator}: NOT FOUND"
+        )
+
 
 # =========================================================
 # 6. ODF PLUS VILLAGES & ODF PLUS MODEL
@@ -155,8 +183,8 @@ def extract_dashboard_value(label):
 
     pattern = (
         rf"{re.escape(label)}"
-        r"\s*\+\s*[\d,]+"
-        r"(?:\s*\*\s*)?"
+        r"\s*\+?\s*[\d,]+"
+        r"(?:\s*\+\s*)?"
         r"\s*([\d,]+)"
     )
 
@@ -166,12 +194,11 @@ def extract_dashboard_value(label):
         re.IGNORECASE
     )
 
-    return (
-        int(
-            match.group(1).replace(",", "")
-        )
-        if match
-        else None
+    if not match:
+        return None
+
+    return int(
+        match.group(1).replace(",", "")
     )
 
 
@@ -183,23 +210,47 @@ odf_plus_model = extract_dashboard_value(
     "ODF Plus Model"
 )
 
-data.extend([
-    [
+
+if odf_plus_villages is not None:
+
+    data.append([
         "ODF Plus Villages",
         0,
         odf_plus_villages
-    ],
-    [
+    ])
+
+    print(
+        f"✓ ODF Plus Villages: {odf_plus_villages:,}"
+    )
+
+else:
+
+    print(
+        "✗ ODF Plus Villages: NOT FOUND"
+    )
+
+
+if odf_plus_model is not None:
+
+    data.append([
         "ODF Plus Model",
         0,
         odf_plus_model
-    ]
-])
+    ])
+
+    print(
+        f"✓ ODF Plus Model: {odf_plus_model:,}"
+    )
+
+else:
+
+    print(
+        "✗ ODF Plus Model: NOT FOUND"
+    )
 
 
 # =========================================================
 # 7. ODF PLUS STATUS
-#    Districts / Blocks / Gram Panchayats
 # =========================================================
 
 status_patterns = {
@@ -252,9 +303,24 @@ for level, pattern in status_patterns.items():
             ]
         ])
 
+        print(
+            f"✓ {level} - ODF Plus: {odf_plus:,}"
+        )
+
+        print(
+            f"✓ {level} - ODF Plus Model: "
+            f"{odf_plus_model:,}"
+        )
+
+    else:
+
+        print(
+            f"✗ {level} ODF Plus status: NOT FOUND"
+        )
+
 
 # =========================================================
-# 8. BIOGAS & CBG PLANTS
+# 8. BIOGAS & VEHICLES
 # =========================================================
 
 plant_patterns = {
@@ -265,15 +331,9 @@ plant_patterns = {
         r".*?Functional\s+([\d,]+)"
     ),
 
-    "CBG Plants": (
-        r"Total Number of CBG Plants"
-        r".*?Registered\s+([\d,]+)"
-        r".*?Functional\s+([\d,]+)"
-    ),
-
-    # Vehicles for collection and Transportation of waste
     "Vehicles": (
-        r"Total Number of Vehicles\s*\(Collection & Transportation of Waste\)"
+        r"Total Number of Vehicles\s*"
+        r"\(Collection\s*&\s*Transportation\s+of\s+Waste\)"
         r".*?Registered\s+([\d,]+)"
         r".*?Functional\s+([\d,]+)"
     )
@@ -298,10 +358,6 @@ for plant, pattern in plant_patterns.items():
             match.group(2).replace(",", "")
         )
 
-        vehicles = int(
-            match.group(2).replace(",", "")
-        )
-
         data.extend([
             [
                 f"{plant} - Registered",
@@ -312,13 +368,24 @@ for plant, pattern in plant_patterns.items():
                 f"{plant} - Functional",
                 0,
                 functional
-            ],
-            [
-                f"{plant} - Vehicles",
-                0,
-                vehicles
             ]
         ])
+
+        print(
+            f"✓ {plant} - Registered: "
+            f"{registered:,}"
+        )
+
+        print(
+            f"✓ {plant} - Functional: "
+            f"{functional:,}"
+        )
+
+    else:
+
+        print(
+            f"✗ {plant}: NOT FOUND"
+        )
 
 
 # =========================================================
@@ -366,6 +433,16 @@ for indicator, pattern in verification_patterns.items():
             change,
             value
         ])
+
+        print(
+            f"✓ {indicator}: {value:,}"
+        )
+
+    else:
+
+        print(
+            f"✗ {indicator}: NOT FOUND"
+        )
 
 
 # =========================================================
@@ -494,10 +571,8 @@ df = (
     .T
 )
 
-# Remove the index name "Indicator"
 df.index.name = None
 
-# Reset row index without creating any extra column
 df = df.reset_index(
     drop=True
 )
@@ -507,45 +582,66 @@ df = df.reset_index(
 # 16. PREPARE GOOGLE SHEET DATA
 # =========================================================
 
-headers = df.columns.tolist()
-
-row = df.iloc[0].tolist()
-
-
-# Convert pandas/numpy values to normal Python values
 headers = [
     str(x)
-    for x in headers
+    for x in df.columns.tolist()
 ]
 
 row = [
-    "" if pd.isna(x) else x
-    for x in row
+    "" if pd.isna(x) else str(x)
+    for x in df.iloc[0].tolist()
 ]
 
 
+print("\n========================================")
+print("DATA READY FOR GOOGLE SHEET")
+print("========================================")
+
+print("Number of columns:", len(headers))
+print("Number of values :", len(row))
+
+print("\nHeaders:")
+print(headers)
+
+print("\nData:")
+print(row)
+
+
 # =========================================================
-# 17. PUSH TO GOOGLE SHEETS
+# 17. CHECK EXISTING GOOGLE SHEET DATA
 # =========================================================
 
 existing_data = worksheet.get_all_values()
 
+print("\n========================================")
+print("GOOGLE SHEET BEFORE WRITE")
+print("========================================")
+
+print(
+    "Existing rows:",
+    len(existing_data)
+)
+
+
+# =========================================================
+# 18. WRITE DATA TO GOOGLE SHEET
+# =========================================================
 
 if not existing_data:
 
-    # First run:
-    # Row 1 = headers
-    # Row 2 = data
+    # -----------------------------------------
+    # FIRST RUN
+    # -----------------------------------------
 
     worksheet.update(
-        "A1",
-        [headers],
+        range_name="A1",
+        values=[headers],
         value_input_option="USER_ENTERED"
     )
 
     worksheet.update(
-        "A2",
-        [row],
+        range_name="A2",
+        values=[row],
         value_input_option="USER_ENTERED"
     )
 
@@ -553,34 +649,95 @@ if not existing_data:
 
 else:
 
-    # Subsequent runs:
-    # Append new data row
+    # -----------------------------------------
+    # SUBSEQUENT RUN
+    # -----------------------------------------
+
+    worksheet.append_row(
+        row,
+        value_input_option="USER_ENTERED"
+    )
 
     next_row = len(existing_data) + 1
 
-    worksheet.update(
-        f"A{next_row}",
-        [row],
-        value_input_option="USER_ENTERED"
+
+# =========================================================
+# 19. VERIFY DATA WAS WRITTEN
+# =========================================================
+
+verification_data = worksheet.get_all_values()
+
+print("\n========================================")
+print("WRITE VERIFICATION")
+print("========================================")
+
+print(
+    "Rows after write:",
+    len(verification_data)
+)
+
+
+if len(verification_data) >= next_row:
+
+    print(
+        "✅ Data successfully written "
+        "to Google Sheet."
+    )
+
+    print("\nWritten row:")
+
+    print(
+        verification_data[next_row - 1]
+    )
+
+else:
+
+    print(
+        "❌ WARNING: Data was NOT found "
+        "after writing."
     )
 
 
 # =========================================================
-# 18. FINAL STATUS
+# 20. FINAL STATUS
 # =========================================================
 
+print("\n========================================")
+print("FINAL STATUS")
+print("========================================")
+
 print(
-    f"✅ SBM(G) dashboard data pushed successfully."
+    "✅ SBM(G) dashboard data pushed successfully."
 )
 
 print(
-    f"✅ Google Sheet row: {next_row}"
+    "Spreadsheet :",
+    spreadsheet.title
 )
 
 print(
-    f"✅ Number of columns: {len(headers)}"
+    "Worksheet   :",
+    worksheet.title
 )
 
 print(
-    f"✅ Date: {row[0]}"
+    "Sheet URL   :",
+    spreadsheet.url
 )
+
+print(
+    "Google row  :",
+    next_row
+)
+
+print(
+    "Columns     :",
+    len(headers)
+)
+
+print(
+    "Date        :",
+    row[0]
+)
+
+print("========================================")
