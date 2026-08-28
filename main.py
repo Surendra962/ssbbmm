@@ -1,12 +1,9 @@
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 import pandas as pd
 import re
 import json
 import os
-from datetime import datetime
 import gspread
 
 
@@ -30,99 +27,22 @@ worksheet = spreadsheet.sheet1
 
 
 # =========================================================
-# 2. CONNECT TO SBM(G) DASHBOARD
+# 2. GET DASHBOARD DATA
 # =========================================================
 
 url = "https://sbm.gov.in/sbmgdashboard/statesdashboard.aspx"
 
-headers = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/151.0.0.0 Safari/537.36"
-    ),
-    "Accept": (
-        "text/html,application/xhtml+xml,"
-        "application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-    ),
-    "Accept-Language": "en-US,en;q=0.9",
-    "Connection": "keep-alive"
-}
-
-
-# Create session with retry
-session = requests.Session()
-
-retry_strategy = Retry(
-    total=5,
-    connect=5,
-    read=5,
-    backoff_factor=5,
-    status_forcelist=[
-        429,
-        500,
-        502,
-        503,
-        504
-    ],
-    allowed_methods=["GET"],
-    raise_on_status=False
+response = requests.get(
+    url,
+    headers={"User-Agent": "Mozilla/5.0"},
+    timeout=30
 )
+response.raise_for_status()
 
-adapter = HTTPAdapter(
-    max_retries=retry_strategy
-)
-
-session.mount(
-    "https://",
-    adapter
-)
-
-session.mount(
-    "http://",
-    adapter
-)
-
-
-print("🔄 Connecting to SBM(G) dashboard...")
-
-
-try:
-
-    response = session.get(
-        url,
-        headers=headers,
-        timeout=(90, 180)
-    )
-
-    response.raise_for_status()
-
-    print(
-        f"✅ SBM(G) dashboard connected — HTTP {response.status_code}"
-    )
-
-except requests.exceptions.RequestException as e:
-
-    print(
-        f"❌ SBM(G) dashboard connection failed: {e}"
-    )
-
-    raise SystemExit(
-        "SBM(G) dashboard is currently unreachable "
-        "from the GitHub Actions runner."
-    )
-
-
-# =========================================================
-# 3. PARSE DASHBOARD
-# =========================================================
-
-soup = BeautifulSoup(
+text = BeautifulSoup(
     response.text,
     "html.parser"
-)
-
-text = soup.get_text(
+).get_text(
     " ",
     strip=True
 )
@@ -135,15 +55,14 @@ text = re.sub(
 
 
 # =========================================================
-# 4. GENERIC VALUE EXTRACTION
+# 3. GENERIC EXTRACTION FUNCTION
 # =========================================================
 
 def get_value(label):
 
     pattern = (
         rf"{re.escape(label)}"
-        r"\s*(?:\+\s*([\d,]+)\s*)?"
-        r"([\d,]+)"
+        r"\s*(?:\+\s*([\d,]+)\s*)?([\d,]+)"
     )
 
     match = re.search(
@@ -156,9 +75,7 @@ def get_value(label):
         return None
 
     change = (
-        int(
-            match.group(1).replace(",", "")
-        )
+        int(match.group(1).replace(",", ""))
         if match.group(1)
         else 0
     )
@@ -171,25 +88,7 @@ def get_value(label):
 
 
 # =========================================================
-# 5. DATA STORAGE
-# =========================================================
-
-data = []
-
-
-def add_data(indicator, change, value):
-
-    if value is not None:
-
-        data.append([
-            indicator,
-            change,
-            value
-        ])
-
-
-# =========================================================
-# 6. STANDARD INDICATORS
+# 4. STANDARD INDICATORS
 # =========================================================
 
 indicators = [
@@ -227,6 +126,12 @@ indicators = [
 ]
 
 
+# =========================================================
+# 5. EXTRACT STANDARD INDICATORS
+# =========================================================
+
+data = []
+
 for indicator in indicators:
 
     result = get_value(indicator)
@@ -235,15 +140,15 @@ for indicator in indicators:
 
         change, value = result
 
-        add_data(
+        data.append([
             indicator,
             change,
             value
-        )
+        ])
 
 
 # =========================================================
-# 7. ODF PLUS VILLAGES & ODF PLUS MODEL
+# 6. ODF PLUS VILLAGES & ODF PLUS MODEL
 # =========================================================
 
 def extract_dashboard_value(label):
@@ -261,11 +166,12 @@ def extract_dashboard_value(label):
         re.IGNORECASE
     )
 
-    if not match:
-        return None
-
-    return int(
-        match.group(1).replace(",", "")
+    return (
+        int(
+            match.group(1).replace(",", "")
+        )
+        if match
+        else None
     )
 
 
@@ -277,23 +183,23 @@ odf_plus_model = extract_dashboard_value(
     "ODF Plus Model"
 )
 
-
-add_data(
-    "ODF Plus Villages",
-    0,
-    odf_plus_villages
-)
-
-add_data(
-    "ODF Plus Model",
-    0,
-    odf_plus_model
-)
+data.extend([
+    [
+        "ODF Plus Villages",
+        0,
+        odf_plus_villages
+    ],
+    [
+        "ODF Plus Model",
+        0,
+        odf_plus_model
+    ]
+])
 
 
 # =========================================================
-# 8. ODF PLUS STATUS
-#    DISTRICTS / BLOCKS / GRAM PANCHAYATS
+# 7. ODF PLUS STATUS
+#    Districts / Blocks / Gram Panchayats
 # =========================================================
 
 status_patterns = {
@@ -333,21 +239,22 @@ for level, pattern in status_patterns.items():
             match.group(2).replace(",", "")
         )
 
-        add_data(
-            f"{level} - ODF Plus",
-            0,
-            odf_plus
-        )
-
-        add_data(
-            f"{level} - ODF Plus Model",
-            0,
-            odf_plus_model
-        )
+        data.extend([
+            [
+                f"{level} - ODF Plus",
+                0,
+                odf_plus
+            ],
+            [
+                f"{level} - ODF Plus Model",
+                0,
+                odf_plus_model
+            ]
+        ])
 
 
 # =========================================================
-# 9. BIOGAS & CBG PLANTS
+# 8. BIOGAS & CBG PLANTS
 # =========================================================
 
 plant_patterns = {
@@ -360,6 +267,13 @@ plant_patterns = {
 
     "CBG Plants": (
         r"Total Number of CBG Plants"
+        r".*?Registered\s+([\d,]+)"
+        r".*?Functional\s+([\d,]+)"
+    ),
+
+    # Vehicles for collection and Transportation of waste
+    "Vehicles": (
+        r"Total Number of Vehicles\s*\(Collection & Transportation of Waste\)"
         r".*?Registered\s+([\d,]+)"
         r".*?Functional\s+([\d,]+)"
     )
@@ -384,21 +298,31 @@ for plant, pattern in plant_patterns.items():
             match.group(2).replace(",", "")
         )
 
-        add_data(
-            f"{plant} - Registered",
-            0,
-            registered
+        vehicles = int(
+            match.group(2).replace(",", "")
         )
 
-        add_data(
-            f"{plant} - Functional",
-            0,
-            functional
-        )
+        data.extend([
+            [
+                f"{plant} - Registered",
+                0,
+                registered
+            ],
+            [
+                f"{plant} - Functional",
+                0,
+                functional
+            ],
+            [
+                f"{plant} - Vehicles",
+                0,
+                vehicles
+            ]
+        ])
 
 
 # =========================================================
-# 10. ODF PLUS MODEL VERIFICATION
+# 9. ODF PLUS MODEL VERIFICATION
 # =========================================================
 
 verification_patterns = {
@@ -437,15 +361,15 @@ for indicator, pattern in verification_patterns.items():
             match.group(2).replace(",", "")
         )
 
-        add_data(
+        data.append([
             indicator,
             change,
             value
-        )
+        ])
 
 
 # =========================================================
-# 11. CREATE DATAFRAME
+# 10. CREATE DATAFRAME
 # =========================================================
 
 df = pd.DataFrame(
@@ -459,7 +383,7 @@ df = pd.DataFrame(
 
 
 # =========================================================
-# 12. REMOVE DUPLICATES & EMPTY VALUES
+# 11. REMOVE DUPLICATES & EMPTY VALUES
 # =========================================================
 
 df = (
@@ -468,15 +392,17 @@ df = (
         subset=["Value"]
     )
     .drop_duplicates(
-        subset=["Indicator"],
+        subset="Indicator",
         keep="first"
     )
-    .reset_index(drop=True)
+    .reset_index(
+        drop=True
+    )
 )
 
 
 # =========================================================
-# 13. KEEP ONLY INDICATOR & VALUE
+# 12. KEEP ONLY INDICATOR AND VALUE
 # =========================================================
 
 df = df[
@@ -485,83 +411,70 @@ df = df[
 
 
 # =========================================================
-# 14. ADD DATE & TIME
+# 13. ADD CURRENT DATE & TIME
 # =========================================================
-
-date_row = pd.DataFrame({
-    "Indicator": ["Date"],
-    "Value": [
-        datetime.now().strftime(
-            "%d-%m-%Y %H:%M:%S"
-        )
-    ]
-})
 
 df = pd.concat(
     [
-        date_row,
-        df
+        df,
+        pd.DataFrame({
+            "Indicator": ["Date"],
+            "Value": [
+                pd.Timestamp.now().strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+            ]
+        })
     ],
     ignore_index=True
 )
 
 
 # =========================================================
-# 15. REQUIRED INDICATOR ORDER
+# 14. REQUIRED INDICATOR ORDER
 # =========================================================
 
 indicator_order = [
 
     "Date",
 
-    # Districts
     "Total Districts",
     "Districts - ODF Plus",
     "Districts - ODF Plus Model",
 
-    # Blocks
     "Total Blocks",
     "Blocks - ODF Plus",
     "Blocks - ODF Plus Model",
 
-    # Gram Panchayats
     "Total Gram Panchayats",
     "Gram Panchyats - ODF Plus",
     "Gram Panchyats - ODF Plus Model",
 
-    # Villages / ODF Plus
     "SBM Villages",
     "ODF Plus Villages",
     "ODF Plus Model",
     "ODF Plus Model (1st Verification)",
     "ODF Plus Model (2nd Verification)",
 
-    # Waste Management
     "Villages having arrangement of Solid Waste Management",
     "Villages having arrangement of Liquid Waste Management",
 
-    # Community Assets
     "Community Compost pits",
     "Waste collection & Segregation sheds",
-    "Vehicles for Collection and Transportation of Waste",
+    "Vehicles for collection and Transportation of waste",
     "Community Soak/Leach/Magic pits",
     "Drainage facility",
     "Phytorid/ DEWATS/ Wetlands/ Duckweed Pond",
     "WSP 3/5 Pond System",
 
-    # Biogas / CBG
     "Biogas Plants - Registered",
     "Biogas Plants - Functional",
-    "CBG Plants - Registered",
-    "CBG Plants - Functional",
 
-    # Other Assets
     "Faecal Sludge Management Plant",
     "Plastic Waste Management Unit",
     "Community Sanitary Complexes",
     "Household Toilets constructed",
 
-    # Household SLWM
     "Soak/Leach/Magic Pit at HH Level",
     "Kitchen Garden at HH Level",
     "Bio gas plants at HH Level",
@@ -570,41 +483,28 @@ indicator_order = [
 
 
 # =========================================================
-# 16. REORDER
+# 15. REORDER AND CONVERT TO ONE ROW
 # =========================================================
 
 df = (
     df
     .set_index("Indicator")
     .reindex(indicator_order)
+    .dropna(how="all")
+    .T
 )
 
-
-# =========================================================
-# 17. CONVERT TO ONE ROW
-# =========================================================
-
-df = df.T
-
+# Remove the index name "Indicator"
 df.index.name = None
 
+# Reset row index without creating any extra column
 df = df.reset_index(
     drop=True
 )
 
 
 # =========================================================
-# 18. REMOVE ANY COMPLETELY EMPTY COLUMNS
-# =========================================================
-
-df = df.dropna(
-    axis=1,
-    how="all"
-)
-
-
-# =========================================================
-# 19. PREPARE GOOGLE SHEET DATA
+# 16. PREPARE GOOGLE SHEET DATA
 # =========================================================
 
 headers = df.columns.tolist()
@@ -625,7 +525,7 @@ row = [
 
 
 # =========================================================
-# 20. PUSH TO GOOGLE SHEETS
+# 17. PUSH TO GOOGLE SHEETS
 # =========================================================
 
 existing_data = worksheet.get_all_values()
@@ -666,7 +566,7 @@ else:
 
 
 # =========================================================
-# 21. FINAL STATUS
+# 18. FINAL STATUS
 # =========================================================
 
 print(
