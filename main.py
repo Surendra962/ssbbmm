@@ -8,53 +8,22 @@ import gspread
 
 
 # =========================================================
-# 1. GOOGLE SHEETS AUTHENTICATION
-# =========================================================
-
-credentials_dict = json.loads(
-    os.environ["GCP_CREDENTIALS_JSON"]
-)
-
-gc = gspread.service_account_from_dict(
-    credentials_dict
-)
-
-spreadsheet = gc.open_by_key(
-    "1Uj72MCqn26u6v0A_g720k_sXg2OJQ1nR2VeNOlMCH60"
-)
-
-worksheet = spreadsheet.get_worksheet(0)
-
-print("\n========================================")
-print("GOOGLE SHEETS")
-print("========================================")
-print("Spreadsheet :", spreadsheet.title)
-print("Worksheet   :", worksheet.title)
-print("URL         :", spreadsheet.url)
-
-
-# =========================================================
-# 2. GET SBM(G) DASHBOARD
+# 1. GET DASHBOARD DATA
 # =========================================================
 
 url = "https://sbm.gov.in/sbmgdashboard/statesdashboard.aspx"
 
 response = requests.get(
     url,
-    headers={
-        "User-Agent": "Mozilla/5.0"
-    },
+    headers={"User-Agent": "Mozilla/5.0"},
     timeout=30
 )
-
 response.raise_for_status()
 
-soup = BeautifulSoup(
+text = BeautifulSoup(
     response.text,
     "html.parser"
-)
-
-text = soup.get_text(
+).get_text(
     " ",
     strip=True
 )
@@ -65,45 +34,16 @@ text = re.sub(
     text
 )
 
-print("\n========================================")
-print("SBM(G) DASHBOARD")
-print("========================================")
-print("Dashboard loaded.")
-print("Text length:", len(text))
-
 
 # =========================================================
-# 3. GENERIC NUMBER CLEANER
-# =========================================================
-
-def clean_number(value):
-
-    if value is None:
-        return None
-
-    value = str(value)
-
-    value = value.replace(",", "")
-    value = value.strip()
-
-    if not value:
-        return None
-
-    try:
-        return int(value)
-    except ValueError:
-        return None
-
-
-# =========================================================
-# 4. GENERIC INDICATOR EXTRACTION
+# 2. GENERIC EXTRACTION FUNCTION
 # =========================================================
 
 def get_value(label):
 
     pattern = (
         rf"{re.escape(label)}"
-        r"\s*(?:\+\s*)?"
+        r"\s*(?:\+\s*([\d,]+)\s*)?"
         r"([\d,]+)"
     )
 
@@ -116,44 +56,36 @@ def get_value(label):
     if not match:
         return None
 
-    return clean_number(
-        match.group(1)
+    change = (
+        int(match.group(1).replace(",", ""))
+        if match.group(1)
+        else 0
     )
+
+    value = int(
+        match.group(2).replace(",", "")
+    )
+
+    return change, value
 
 
 # =========================================================
-# 5. INDICATORS
+# 3. STANDARD INDICATORS
 # =========================================================
 
 indicators = [
 
-    # -----------------------------------------
-    # BASIC COVERAGE
-    # -----------------------------------------
-
+    # Basic Coverage
     "Total Districts",
     "Total Blocks",
     "Total Gram Panchayats",
     "SBM Villages",
 
-    # -----------------------------------------
-    # ODF PLUS
-    # -----------------------------------------
-
-    "ODF Plus Villages",
-    "ODF Plus Model",
-
-    # -----------------------------------------
-    # WASTE MANAGEMENT
-    # -----------------------------------------
-
+    # ODF Plus
     "Villages having arrangement of Solid Waste Management",
     "Villages having arrangement of Liquid Waste Management",
 
-    # -----------------------------------------
-    # COMMUNITY ASSETS
-    # -----------------------------------------
-
+    # Community Assets
     "Community Compost pits",
     "Waste collection & Segregation sheds",
     "Vehicles for collection and Transportation of waste",
@@ -162,19 +94,13 @@ indicators = [
     "Phytorid/ DEWATS/ Wetlands/ Duckweed Pond",
     "WSP 3/5 Pond System",
 
-    # -----------------------------------------
-    # OTHER ASSETS
-    # -----------------------------------------
-
+    # Other Assets
     "Faecal Sludge Management Plant",
     "Plastic Waste Management Unit",
     "Community Sanitary Complexes",
     "Household Toilets constructed",
 
-    # -----------------------------------------
-    # HOUSEHOLD SLWM
-    # -----------------------------------------
-
+    # Household SLWM Assets
     "Soak/Leach/Magic Pit at HH Level",
     "Kitchen Garden at HH Level",
     "Bio gas plants at HH Level",
@@ -183,78 +109,102 @@ indicators = [
 
 
 # =========================================================
-# 6. EXTRACT STANDARD INDICATORS
+# 4. EXTRACT STANDARD INDICATORS
 # =========================================================
 
 data = []
 
-print("\n========================================")
-print("EXTRACTING INDICATORS")
-print("========================================")
-
 for indicator in indicators:
 
-    value = get_value(indicator)
+    result = get_value(indicator)
 
-    if value is not None:
+    if result:
+
+        change, value = result
 
         data.append([
             indicator,
+            change,
             value
         ])
 
-        print(
-            f"✓ {indicator}: {value:,}"
-        )
 
-    else:
+# =========================================================
+# 5. ODF PLUS VILLAGES & ODF PLUS MODEL
+# =========================================================
 
-        print(
-            f"✗ {indicator}: NOT FOUND"
+def extract_dashboard_value(label):
+
+    pattern = (
+        rf"{re.escape(label)}"
+        r"\s*\+\s*[\d,]+"
+        r"(?:\s*\*\s*)?"
+        r"\s*([\d,]+)"
+    )
+
+    match = re.search(
+        pattern,
+        text,
+        re.IGNORECASE
+    )
+
+    return (
+        int(
+            match.group(1).replace(",", "")
         )
+        if match
+        else None
+    )
+
+
+odf_plus_villages = extract_dashboard_value(
+    "ODF Plus Villages"
+)
+
+odf_plus_model = extract_dashboard_value(
+    "ODF Plus Model"
+)
+
+
+data.extend([
+    [
+        "ODF Plus Villages",
+        0,
+        odf_plus_villages
+    ],
+    [
+        "ODF Plus Model",
+        0,
+        odf_plus_model
+    ]
+])
 
 
 # =========================================================
-# 7. ODF PLUS STATUS
+# 6. ODF PLUS STATUS
+#    Districts / Blocks / Gram Panchayats
 # =========================================================
 
 status_patterns = {
 
-    "Districts - ODF Plus": (
+    "Districts": (
         r"Districts\s+ODF Plus\s+([\d,]+)"
-    ),
-
-    "Districts - ODF Plus Model": (
-        r"Districts\s+ODF Plus\s+[\d,]+"
         r"\s+ODF Plus Model\s+([\d,]+)"
     ),
 
-    "Blocks - ODF Plus": (
+    "Blocks": (
         r"Blocks\s+ODF Plus\s+([\d,]+)"
-    ),
-
-    "Blocks - ODF Plus Model": (
-        r"Blocks\s+ODF Plus\s+[\d,]+"
         r"\s+ODF Plus Model\s+([\d,]+)"
     ),
 
-    "Gram Panchyats - ODF Plus": (
+    "Gram Panchyats": (
         r"Gram Panchyats\s*-?\s*ODF Plus\s+([\d,]+)"
-    ),
-
-    "Gram Panchyats - ODF Plus Model": (
-        r"Gram Panchyats\s*-?\s*ODF Plus\s+[\d,]+"
         r"\s+ODF Plus Model\s+([\d,]+)"
     )
 }
 
 
-print("\n========================================")
-print("ODF PLUS STATUS")
-print("========================================")
-
-
-for indicator, pattern in status_patterns.items():
+for level, pattern in status_patterns.items():
 
     match = re.search(
         pattern,
@@ -264,107 +214,105 @@ for indicator, pattern in status_patterns.items():
 
     if match:
 
-        value = clean_number(
-            match.group(1)
+        odf_plus = int(
+            match.group(1).replace(",", "")
         )
 
-        data.append([
-            indicator,
-            value
+        odf_plus_model = int(
+            match.group(2).replace(",", "")
+        )
+
+        data.extend([
+            [
+                f"{level} - ODF Plus",
+                0,
+                odf_plus
+            ],
+            [
+                f"{level} - ODF Plus Model",
+                0,
+                odf_plus_model
+            ]
         ])
 
-        print(
-            f"✓ {indicator}: {value:,}"
+
+# =========================================================
+# 7. BIOGAS & VEHICLES
+# =========================================================
+# CBG REMOVED
+# =========================================================
+
+plant_patterns = {
+
+    "Biogas Plants": (
+        r"Total Number of Biogas Plants\s*\(SBM-G\)"
+        r".*?Registered\s+([\d,]+)"
+        r".*?Functional\s+([\d,]+)"
+    ),
+
+    # Vehicles for collection and Transportation of waste
+    "Vehicles": (
+        r"Total Number of Vehicles\s*\(Collection & Transportation of Waste\)"
+        r".*?Registered\s+([\d,]+)"
+        r".*?Functional\s+([\d,]+)"
+    )
+}
+
+
+for plant, pattern in plant_patterns.items():
+
+    match = re.search(
+        pattern,
+        text,
+        re.IGNORECASE
+    )
+
+    if match:
+
+        registered = int(
+            match.group(1).replace(",", "")
         )
 
-    else:
-
-        print(
-            f"✗ {indicator}: NOT FOUND"
+        functional = int(
+            match.group(2).replace(",", "")
         )
 
-
-# =========================================================
-# 8. BIOGAS PLANTS
-# =========================================================
-
-biogas_pattern = (
-    r"Total Number of Biogas Plants\s*\(SBM-G\)"
-    r".*?Registered\s+([\d,]+)"
-    r".*?Functional\s+([\d,]+)"
-)
-
-match = re.search(
-    biogas_pattern,
-    text,
-    re.IGNORECASE
-)
-
-print("\n========================================")
-print("BIOGAS PLANTS")
-print("========================================")
-
-if match:
-
-    registered = clean_number(
-        match.group(1)
-    )
-
-    functional = clean_number(
-        match.group(2)
-    )
-
-    data.extend([
-        [
-            "Biogas Plants - Registered",
-            registered
-        ],
-        [
-            "Biogas Plants - Functional",
-            functional
-        ]
-    ])
-
-    print(
-        f"✓ Biogas Plants - Registered: "
-        f"{registered:,}"
-    )
-
-    print(
-        f"✓ Biogas Plants - Functional: "
-        f"{functional:,}"
-    )
-
-else:
-
-    print(
-        "✗ Biogas Plants: NOT FOUND"
-    )
+        # Keep your original output structure
+        data.extend([
+            [
+                f"{plant} - Registered",
+                0,
+                registered
+            ],
+            [
+                f"{plant} - Functional",
+                0,
+                functional
+            ],
+            [
+                f"{plant} - Vehicles",
+                0,
+                functional
+            ]
+        ])
 
 
 # =========================================================
-# 9. ODF PLUS MODEL VERIFICATION
+# 8. ODF PLUS MODEL VERIFICATION
 # =========================================================
 
 verification_patterns = {
 
     "ODF Plus Model (1st Verification)": (
-        r"ODF Plus Model\s*"
-        r"\(\s*1\s*st\s+Verfication\s*\)"
-        r".*?([\d,]+)"
+        r"ODF Plus Model\s*\(\s*1\s*st\s+Verfication\s*\)"
+        r"\s*(?:\+\s*([\d,]+))?\s*([\d,]+)"
     ),
 
     "ODF Plus Model (2nd Verification)": (
-        r"ODF Plus Model\s*"
-        r"\(\s*2\s*nd\s+Verfication\s*\)"
-        r".*?([\d,]+)"
+        r"ODF Plus Model\s*\(\s*2\s*nd\s+Verfication\s*\)"
+        r"\s*(?:\+\s*([\d,]+))?\s*([\d,]+)"
     )
 }
-
-
-print("\n========================================")
-print("ODF PLUS MODEL VERIFICATION")
-print("========================================")
 
 
 for indicator, pattern in verification_patterns.items():
@@ -377,72 +325,81 @@ for indicator, pattern in verification_patterns.items():
 
     if match:
 
-        value = clean_number(
-            match.group(1)
+        change = (
+            int(
+                match.group(1).replace(",", "")
+            )
+            if match.group(1)
+            else 0
+        )
+
+        value = int(
+            match.group(2).replace(",", "")
         )
 
         data.append([
             indicator,
+            change,
             value
         ])
 
-        print(
-            f"✓ {indicator}: {value:,}"
-        )
-
-    else:
-
-        print(
-            f"✗ {indicator}: NOT FOUND"
-        )
-
 
 # =========================================================
-# 10. CREATE DATAFRAME
+# 9. CREATE DATAFRAME
 # =========================================================
 
 df = pd.DataFrame(
     data,
     columns=[
         "Indicator",
+        "Daily_Change",
         "Value"
     ]
 )
 
 
 # =========================================================
-# 11. REMOVE EMPTY VALUES
+# 10. REMOVE DUPLICATES & EMPTY VALUES
 # =========================================================
 
-df = df.dropna(
-    subset=["Value"]
+df = (
+    df
+    .dropna(
+        subset=["Value"]
+    )
+    .drop_duplicates(
+        subset="Indicator",
+        keep="first"
+    )
+    .reset_index(
+        drop=True
+    )
 )
 
 
 # =========================================================
-# 12. REMOVE DUPLICATES
+# 11. KEEP ONLY INDICATOR AND VALUE
 # =========================================================
 
-df = df.drop_duplicates(
-    subset="Indicator",
-    keep="first"
-)
+df = df[
+    ["Indicator", "Value"]
+].copy()
 
 
 # =========================================================
-# 13. ADD DATE
+# 12. ADD CURRENT DATE & TIME
 # =========================================================
-
-current_date = pd.Timestamp.now().strftime(
-    "%Y-%m-%d %H:%M:%S"
-)
 
 df = pd.concat(
     [
         df,
         pd.DataFrame({
             "Indicator": ["Date"],
-            "Value": [current_date]
+            "Value": [
+                pd.Timestamp.now().strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+            ]
         })
     ],
     ignore_index=True
@@ -450,7 +407,7 @@ df = pd.concat(
 
 
 # =========================================================
-# 14. REQUIRED COLUMN ORDER
+# 13. REQUIRED INDICATOR ORDER
 # =========================================================
 
 indicator_order = [
@@ -472,7 +429,6 @@ indicator_order = [
     "SBM Villages",
     "ODF Plus Villages",
     "ODF Plus Model",
-
     "ODF Plus Model (1st Verification)",
     "ODF Plus Model (2nd Verification)",
 
@@ -503,153 +459,109 @@ indicator_order = [
 
 
 # =========================================================
-# 15. REORDER DATA
+# 14. REORDER AND CONVERT TO ONE ROW
 # =========================================================
 
 df = (
     df
     .set_index("Indicator")
     .reindex(indicator_order)
+    .dropna(how="all")
+    .T
+)
+
+# Remove index name "Indicator"
+df.index.name = None
+
+# Reset row index
+df = df.reset_index(
+    drop=True
 )
 
 
 # =========================================================
-# 16. CONVERT TO ONE ROW
+# 15. GOOGLE SHEETS AUTHENTICATION
 # =========================================================
 
-headers = df.index.tolist()
+credentials_dict = json.loads(
+    os.environ["GCP_CREDENTIALS_JSON"]
+)
 
-row = df["Value"].tolist()
+gc = gspread.service_account_from_dict(
+    credentials_dict
+)
+
+spreadsheet = gc.open_by_key(
+    "1Uj72MCqn26u6v0A_g720k_sXg2OJQ1nR2VeNOlMCH60"
+)
+
+worksheet = spreadsheet.get_worksheet(0)
 
 
 # =========================================================
-# 17. CONVERT VALUES TO GOOGLE SHEETS SAFE VALUES
+# 16. PREPARE GOOGLE SHEET DATA
 # =========================================================
 
 headers = [
     str(x)
-    for x in headers
+    for x in df.columns.tolist()
 ]
 
 row = [
     "" if pd.isna(x) else x
-    for x in row
+    for x in df.iloc[0].tolist()
 ]
 
 
 # =========================================================
-# 18. SHOW FINAL DATA BEFORE UPLOAD
+# 17. CLEAR OLD DATA
 # =========================================================
-
-print("\n========================================")
-print("FINAL DATA")
-print("========================================")
-
-print(
-    "Number of indicators:",
-    len(headers)
-)
-
-for header, value in zip(headers, row):
-
-    print(
-        f"{header}: {value}"
-    )
-
-
-# =========================================================
-# 19. CLEAR EXISTING GOOGLE SHEET
-# =========================================================
-
-print("\n========================================")
-print("CLEARING GOOGLE SHEET")
-print("========================================")
 
 worksheet.clear()
 
-print(
-    "✓ Existing sheet data cleared."
-)
-
 
 # =========================================================
-# 20. WRITE HEADERS
+# 18. WRITE HEADERS
 # =========================================================
 
 worksheet.update(
-    range_name="A1",
-    values=[headers],
+    "A1",
+    [headers],
     value_input_option="USER_ENTERED"
-)
-
-print(
-    "✓ Headers written to row 1."
 )
 
 
 # =========================================================
-# 21. WRITE DATA
+# 19. WRITE DATA
 # =========================================================
 
 worksheet.update(
-    range_name="A2",
-    values=[row],
+    "A2",
+    [row],
     value_input_option="USER_ENTERED"
 )
 
-print(
-    "✓ Dashboard data written to row 2."
-)
-
 
 # =========================================================
-# 22. READ BACK FROM GOOGLE SHEETS
+# 20. VERIFY GOOGLE SHEET
 # =========================================================
-
-print("\n========================================")
-print("VERIFYING GOOGLE SHEET")
-print("========================================")
 
 written_data = worksheet.get(
     "A1:AZ2"
 )
 
-print(
-    "Rows returned:",
-    len(written_data)
-)
-
-if len(written_data) >= 2:
-
-    print(
-        "✓ Headers found."
-    )
-
-    print(
-        "✓ Data row found."
-    )
-
-    print(
-        "✓ Google Sheet write verified successfully."
-    )
-
-else:
-
-    print(
-        "❌ Data verification failed."
-    )
-
 
 # =========================================================
-# 23. FINAL STATUS
+# 21. FINAL STATUS
 # =========================================================
 
 print("\n========================================")
-print("SUCCESS")
+print("SBM(G) DASHBOARD DATA")
 print("========================================")
 
 print(
-    "✅ SBM(G) dashboard data uploaded."
+    "Indicators extracted:",
+    len(headers)
 )
 
 print(
@@ -663,18 +575,31 @@ print(
 )
 
 print(
-    "Columns:",
-    len(headers)
+    "Google Sheet URL:",
+    spreadsheet.url
 )
 
 print(
     "Date:",
-    current_date
+    row[0]
 )
 
 print(
-    "Google Sheet:",
-    spreadsheet.url
+    "Rows returned after upload:",
+    len(written_data)
 )
+
+if len(written_data) >= 2:
+
+    print(
+        "✅ DATA SUCCESSFULLY WRITTEN "
+        "TO GOOGLE SHEET"
+    )
+
+else:
+
+    print(
+        "❌ GOOGLE SHEET VERIFICATION FAILED"
+    )
 
 print("========================================")
