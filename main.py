@@ -478,9 +478,68 @@ df = df.reset_index(
     drop=True
 )
 
+# =========================================================
+# 7. GOOGLE SHEETS AUTHENTICATION
+# =========================================================
+
+credentials_dict = json.loads(
+    os.environ["GCP_CREDENTIALS_JSON"]
+)
+
+gc = gspread.service_account_from_dict(
+    credentials_dict
+)
+
+spreadsheet = gc.open_by_key(
+    "1Uj72MCqn26u6v0A_g720k_sXg2OJQ1nR2VeNOlMCH60"
+)
+
+worksheet = spreadsheet.get_worksheet(0)
+
+
+print("\n========================================")
+print("GOOGLE SHEETS CONNECTION")
+print("========================================")
+
+print("Spreadsheet :", spreadsheet.title)
+print("Worksheet   :", worksheet.title)
+print("URL         :", spreadsheet.url)
+
 
 # =========================================================
-# 15. GOOGLE SHEETS AUTHENTICATION
+# 8. PREPARE DATA
+# =========================================================
+
+headers = df.columns.tolist()
+
+row = df.iloc[0].tolist()
+
+
+# Convert values to Google Sheets-safe values
+headers = [
+    str(x)
+    for x in headers
+]
+
+row = [
+    "" if pd.isna(x) else x
+    for x in row
+]
+
+
+
+for i in range(min(10, len(headers))):
+
+    print(
+        headers[i],
+        "=",
+        row[i]
+    )
+
+
+
+# =========================================================
+# 1. AUTHENTICATE GOOGLE SHEETS
 # =========================================================
 
 credentials_dict = json.loads(
@@ -499,107 +558,92 @@ worksheet = spreadsheet.get_worksheet(0)
 
 
 # =========================================================
-# 16. PREPARE GOOGLE SHEET DATA
+# 2. PREPARE DF DATA
 # =========================================================
 
+headers = df.columns.tolist()
+
+row = df.iloc[0].tolist()
+
+
+# Convert pandas values to normal Python values
 headers = [
     str(x)
-    for x in df.columns.tolist()
+    for x in headers
 ]
 
 row = [
     "" if pd.isna(x) else x
-    for x in df.iloc[0].tolist()
+    for x in row
 ]
 
 
 # =========================================================
-# 17. CLEAR OLD DATA
+# 3. CHECK EXISTING SHEET
 # =========================================================
 
-worksheet.clear()
-
-
-# =========================================================
-# 18. WRITE HEADERS
-# =========================================================
-
-worksheet.update(
-    "A1",
-    [headers],
-    value_input_option="USER_ENTERED"
-)
+existing_data = worksheet.get_all_values()
 
 
 # =========================================================
-# 19. WRITE DATA
+# 4. FIRST RUN
 # =========================================================
 
-worksheet.update(
-    "A2",
-    [row],
-    value_input_option="USER_ENTERED"
-)
+if not existing_data:
 
-
-# =========================================================
-# 20. VERIFY GOOGLE SHEET
-# =========================================================
-
-written_data = worksheet.get(
-    "A1:AZ2"
-)
-
-
-# =========================================================
-# 21. FINAL STATUS
-# =========================================================
-
-print("\n========================================")
-print("SBM(G) DASHBOARD DATA")
-print("========================================")
-
-print(
-    "Indicators extracted:",
-    len(headers)
-)
-
-print(
-    "Spreadsheet:",
-    spreadsheet.title
-)
-
-print(
-    "Worksheet:",
-    worksheet.title
-)
-
-print(
-    "Google Sheet URL:",
-    spreadsheet.url
-)
-
-print(
-    "Date:",
-    row[0]
-)
-
-print(
-    "Rows returned after upload:",
-    len(written_data)
-)
-
-if len(written_data) >= 2:
-
-    print(
-        "✅ DATA SUCCESSFULLY WRITTEN "
-        "TO GOOGLE SHEET"
+    # Row 1 = headers
+    worksheet.update(
+        "A1",
+        [headers],
+        value_input_option="USER_ENTERED"
     )
+
+    # Row 2 = first data
+    worksheet.update(
+        "A2",
+        [row],
+        value_input_option="USER_ENTERED"
+    )
+
+    next_row = 2
+
+
+# =========================================================
+# 5. SUBSEQUENT RUN
+# =========================================================
 
 else:
 
-    print(
-        "❌ GOOGLE SHEET VERIFICATION FAILED"
+    # Find next available row
+    next_row = len(existing_data) + 1
+
+    worksheet.update(
+        f"A{next_row}",
+        [row],
+        value_input_option="USER_ENTERED"
     )
 
-print("========================================")
+
+# =========================================================
+# 6. FINAL STATUS
+# =========================================================
+
+print(
+    "✅ SBM(G) dashboard data pushed successfully."
+)
+
+print(
+    f"✅ Google Sheet row: {next_row}"
+)
+
+print(
+    f"✅ Number of columns: {len(headers)}"
+)
+
+print(
+    f"✅ Date: {row[0]}"
+)
+
+print(
+    f"✅ Worksheet: {worksheet.title}"
+)
